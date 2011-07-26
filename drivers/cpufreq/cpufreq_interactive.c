@@ -61,7 +61,7 @@ static cpumask_t down_cpumask;
 #define DEFAULT_MIN_SAMPLE_TIME 80000;
 static unsigned long min_sample_time;
 
-#define LOAD_SCALE_MAX 85
+#define LOAD_SCALE_MAX 75
 
 #define DEBUG 0
 #define BUFSZ 128
