@@ -14,6 +14,11 @@
  *
  * Author: Mike Chan (mike@android.com)
  *
+ * Adaptation for 2.6.29 kernel: Nadlabak (pavel@doshaska.net)
+ * requires to add
+ * EXPORT_SYMBOL_GPL(nr_running);
+ * at the end of kernel/sched.c
+ *
  */
 
 #include <linux/cpu.h>
@@ -24,8 +29,8 @@
 #include <linux/tick.h>
 #include <linux/timer.h>
 #include <linux/workqueue.h>
+#include <linux/moduleparam.h>
 #include <linux/kthread.h>
-
 #include <asm/cputime.h>
 
 static void (*pm_idle_old)(void);
@@ -61,7 +66,7 @@ static cpumask_t down_cpumask;
 #define DEFAULT_MIN_SAMPLE_TIME 80000;
 static unsigned long min_sample_time;
 
-#define LOAD_SCALE_MAX 75
+#define LOAD_SCALE_MAX 85
 
 #define DEBUG 0
 #define BUFSZ 128
@@ -490,14 +495,12 @@ static void cpufreq_interactive_freq_down(struct work_struct *work)
 	}
 }
 
-static ssize_t show_min_sample_time(struct cpufreq_policy *policy,
-				char *buf)
+static ssize_t show_min_sample_time(struct cpufreq_policy *policy, char *buf)
 {
 	return sprintf(buf, "%lu\n", min_sample_time);
 }
 
-static ssize_t store_min_sample_time(struct cpufreq_policy *policy,
-				const char *buf, size_t count)
+static ssize_t store_min_sample_time(struct cpufreq_policy *policy, const char *buf, size_t count)
 {
 	return strict_strtoul(buf, 0, &min_sample_time);
 }
@@ -505,7 +508,7 @@ static ssize_t store_min_sample_time(struct cpufreq_policy *policy,
 static struct freq_attr min_sample_time_attr = __ATTR(min_sample_time, 0644,
 		show_min_sample_time, store_min_sample_time);
 
-static struct attribute *interactive_attributes[] = {
+static struct attribute * interactive_attributes[] = {
 	&min_sample_time_attr.attr,
 	NULL,
 };
@@ -541,11 +544,9 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *new_policy,
 		if (atomic_inc_return(&active_count) > 1)
 			return 0;
 
-		rc = sysfs_create_group(&new_policy->kobj,
-				&interactive_attr_group);
+		rc = sysfs_create_group(&new_policy->kobj, &interactive_attr_group);
 		if (rc)
 			return rc;
-
 		pm_idle_old = pm_idle;
 		pm_idle = cpufreq_interactive_idle;
 		break;
@@ -555,7 +556,6 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *new_policy,
 
 		if (atomic_dec_return(&active_count) > 0)
 			return 0;
-
 		sysfs_remove_group(&new_policy->kobj,
 				&interactive_attr_group);
 
@@ -575,8 +575,9 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *new_policy,
 	return 0;
 }
 
+
 static int __init cpufreq_interactive_init(void)
-{
+{	
 	unsigned int i;
 	struct cpufreq_interactive_cpuinfo *pcpu;
 	struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };

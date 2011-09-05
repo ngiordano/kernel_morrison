@@ -21,8 +21,6 @@
 #include <linux/hrtimer.h>
 #include <linux/tick.h>
 #include <linux/ktime.h>
-#include <linux/earlysuspend.h>
-#include <linux/platform_device.h>
 #include <linux/input.h>
 #include <linux/workqueue.h>
 
@@ -37,7 +35,6 @@
 #define MICRO_FREQUENCY_UP_THRESHOLD		(95)
 #define MIN_FREQUENCY_UP_THRESHOLD		(11)
 #define MAX_FREQUENCY_UP_THRESHOLD		(100)
-#define MIN_FREQUENCY_DOWN_DIFFERENTIAL		(1)
 
 /*
  * The polling frequency of this governor depends on the capability of
@@ -100,28 +97,12 @@ static struct dbs_tuners {
 	unsigned int down_differential;
 	unsigned int ignore_nice;
 	unsigned int powersave_bias;
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	unsigned int is_suspended;
-	unsigned int susp_rate;
-#endif
 } dbs_tuners_ins = {
 	.up_threshold = DEF_FREQUENCY_UP_THRESHOLD,
 	.down_differential = DEF_FREQUENCY_DOWN_DIFFERENTIAL,
 	.ignore_nice = 0,
 	.powersave_bias = 0,
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	.is_suspended = 0,
-#endif
 };
-
-static inline unsigned int get_sampling_rate(void)
-{
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	if (dbs_tuners_ins.is_suspended)
-		return dbs_tuners_ins.susp_rate;
-#endif
-	return dbs_tuners_ins.sampling_rate;
-}
 
 static inline cputime64_t get_cpu_idle_time_jiffy(unsigned int cpu,
 							cputime64_t *wall)
@@ -199,7 +180,7 @@ static unsigned int powersave_bias_target(struct cpufreq_policy *policy,
 		dbs_info->freq_lo_jiffies = 0;
 		return freq_lo;
 	}
-	jiffies_total = usecs_to_jiffies(get_sampling_rate());
+	jiffies_total = usecs_to_jiffies(dbs_tuners_ins.sampling_rate);
 	jiffies_hi = (freq_avg - freq_lo) * jiffies_total;
 	jiffies_hi += ((freq_hi - freq_lo) / 2);
 	jiffies_hi /= (freq_hi - freq_lo);
@@ -246,9 +227,7 @@ static ssize_t show_##file_name						\
 	return sprintf(buf, "%u\n", dbs_tuners_ins.object);		\
 }
 show_one(sampling_rate, sampling_rate);
-show_one(susp_rate, susp_rate);
 show_one(up_threshold, up_threshold);
-show_one(down_differential, down_differential);
 show_one(ignore_nice_load, ignore_nice);
 show_one(powersave_bias, powersave_bias);
 
@@ -272,28 +251,6 @@ static ssize_t store_sampling_rate(struct cpufreq_policy *unused,
 	return count;
 }
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
-static ssize_t store_susp_rate(struct cpufreq_policy *unused,
-		const char *buf, size_t count)
-{
-	unsigned int input;
-	int ret;
-	ret = sscanf(buf, "%u", &input);
-
-	mutex_lock(&dbs_mutex);
-	if (ret != 1 || input > MAX_SAMPLING_RATE
-			|| input < MIN_SAMPLING_RATE) {
-		mutex_unlock(&dbs_mutex);
-		return -EINVAL;
-	}
-
-	dbs_tuners_ins.susp_rate = input;
-	mutex_unlock(&dbs_mutex);
-
-	return count;
-}
-#endif
-
 static ssize_t store_up_threshold(struct cpufreq_policy *unused,
 		const char *buf, size_t count)
 {
@@ -309,26 +266,6 @@ static ssize_t store_up_threshold(struct cpufreq_policy *unused,
 	}
 
 	dbs_tuners_ins.up_threshold = input;
-	mutex_unlock(&dbs_mutex);
-
-	return count;
-}
-
-static ssize_t store_down_differential(struct cpufreq_policy *unused,
-		const char *buf, size_t count)
-{
-	unsigned int input;
-	int ret;
-	ret = sscanf(buf, "%u", &input);
-
-	mutex_lock(&dbs_mutex);
-	if (ret != 1 || input >= dbs_tuners_ins.up_threshold ||
-			input < MIN_FREQUENCY_DOWN_DIFFERENTIAL) {
-		mutex_unlock(&dbs_mutex);
-		return -EINVAL;
-	}
-
-	dbs_tuners_ins.down_differential = input;
 	mutex_unlock(&dbs_mutex);
 
 	return count;
@@ -397,11 +334,7 @@ static struct freq_attr _name = \
 __ATTR(_name, 0644, show_##_name, store_##_name)
 
 define_one_rw(sampling_rate);
-#ifdef CONFIG_HAS_EARLYSUSPEND
-define_one_rw(susp_rate);
-#endif
 define_one_rw(up_threshold);
-define_one_rw(down_differential);
 define_one_rw(ignore_nice_load);
 define_one_rw(powersave_bias);
 
@@ -410,12 +343,8 @@ static struct attribute * dbs_attributes[] = {
 	&sampling_rate_min.attr,
 	&sampling_rate.attr,
 	&up_threshold.attr,
-	&down_differential.attr,
 	&ignore_nice_load.attr,
 	&powersave_bias.attr,
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	&susp_rate.attr,
-#endif
 	NULL
 };
 
@@ -560,7 +489,7 @@ static void do_dbs_timer(struct work_struct *work)
 	int sample_type = dbs_info->sample_type;
 
 	/* We want all CPUs to do sampling nearly on same jiffy */
-	int delay = usecs_to_jiffies(get_sampling_rate());
+	int delay = usecs_to_jiffies(dbs_tuners_ins.sampling_rate);
 
 	if (num_online_cpus() > 1)
 		delay -= jiffies % delay;
@@ -612,56 +541,6 @@ static inline void dbs_timer_exit(struct cpu_dbs_info_s *dbs_info)
 	cancel_delayed_work(&dbs_info->work);
 }
 
-
-static int __devinit ondemand_probe(struct platform_device *dev)
-{
-    return 0;
-}
-
-static int __devexit ondemand_remove(struct platform_device *dev)
-{
-    return 0;
-}
-static int ondemand_suspend(struct platform_device *dev, pm_message_t state)
-{
-    /* only for mono-cpu system */
-    int cpu = 0;
-    struct cpu_dbs_info_s *this_dbs_info;
-
-    this_dbs_info = &per_cpu(cpu_dbs_info, cpu);
-
-    dbs_timer_exit(this_dbs_info);
-    flush_workqueue(kondemand_wq);
-
-    /* force lowest opp available */
-    __cpufreq_driver_target(this_dbs_info->cur_policy, 0,
-		CPUFREQ_RELATION_L);
-    return 0;
-}
-
-static int ondemand_resume(struct platform_device *dev)
-{
-    int cpu = 0;
-    struct cpu_dbs_info_s *this_dbs_info;
-
-    this_dbs_info = &per_cpu(cpu_dbs_info, cpu);
-    dbs_timer_init(this_dbs_info);
-    return 0;
-}
-
-static struct platform_driver ondemand_dummy_driver = {
-    .probe      = ondemand_probe,
-    .remove     = ondemand_remove,
-    .suspend    = ondemand_suspend,
-    .resume     = ondemand_resume,
-    .driver     = {
-		.name   = "ondemand",
-		.owner  = THIS_MODULE,
-    },
-};
-
-static struct platform_device *pd;
-
 static void dbs_refresh_callback(struct work_struct *unused)
 {
 	struct cpufreq_policy *policy;
@@ -674,8 +553,6 @@ static void dbs_refresh_callback(struct work_struct *unused)
 	policy = this_dbs_info->cur_policy;
 
 	if (policy->cur < policy->max) {
-		policy->cur = policy->max;
-
 		__cpufreq_driver_target(policy, policy->max,
 					CPUFREQ_RELATION_L);
 		this_dbs_info->prev_cpu_idle = get_cpu_idle_time(0,
@@ -692,11 +569,29 @@ static void dbs_input_event(struct input_handle *handle, unsigned int type,
 	schedule_work(&dbs_refresh_work);
 }
 
+static int input_dev_filter(const char* input_dev_name)
+{
+	int ret = 0;
+	if (strstr(input_dev_name, "touchscreen") ||
+		strstr(input_dev_name, "-keypad") ||
+		strstr(input_dev_name, "-nav") ||
+		strstr(input_dev_name, "-oj")) {
+	}
+	else {
+		ret = 1;
+	}
+	return ret;
+}
+
 static int dbs_input_connect(struct input_handler *handler,
 		struct input_dev *dev, const struct input_device_id *id)
 {
 	struct input_handle *handle;
 	int error;
+
+	/* filter out those input_dev that we don't care */
+	if (input_dev_filter(dev->name))
+		return 0;
 
 	handle = kzalloc(sizeof(struct input_handle), GFP_KERNEL);
 	if (!handle)
@@ -801,13 +696,9 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 				def_sampling_rate = MIN_STAT_SAMPLING_RATE;
 
 			dbs_tuners_ins.sampling_rate = def_sampling_rate;
-#ifdef CONFIG_HAS_EARLYSUSPEND
-			dbs_tuners_ins.susp_rate = 3*def_sampling_rate;
-#endif
-			pd = platform_device_register_simple("ondemand", -1,
-					NULL, 0);
 		}
 		dbs_timer_init(this_dbs_info);
+
 		rc = input_register_handler(&dbs_input_handler);
 		mutex_unlock(&dbs_mutex);
 		break;
@@ -817,9 +708,8 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 		dbs_timer_exit(this_dbs_info);
 		sysfs_remove_group(&policy->kobj, &dbs_attr_group);
 		dbs_enable--;
-		if (dbs_enable == 0)
-			platform_device_unregister(pd);
 		input_unregister_handler(&dbs_input_handler);
+
 		mutex_unlock(&dbs_mutex);
 
 		break;
@@ -850,26 +740,6 @@ struct cpufreq_governor cpufreq_gov_ondemand = {
 	.owner			= THIS_MODULE,
 };
 
-#ifdef CONFIG_HAS_EARLYSUSPEND
-
-void dbs_suspend(struct early_suspend *h)
-{
-    dbs_tuners_ins.is_suspended = 1;
-}
-
-void dbs_resume(struct early_suspend *h)
-{
-    dbs_tuners_ins.is_suspended = 0;
-}
-
-struct early_suspend dbs_suspend_info = {
-    .suspend = dbs_suspend,
-    .resume = dbs_resume,
-    .level = EARLY_SUSPEND_LEVEL_STOP_DRAWING,
-};
-#endif
-
-
 static int __init cpufreq_gov_dbs_init(void)
 {
 	int err;
@@ -880,10 +750,13 @@ static int __init cpufreq_gov_dbs_init(void)
 	idle_time = get_cpu_idle_time_us(cpu, &wall);
 	put_cpu();
 	if (idle_time != -1ULL) {
+/* use default threshold for 7X00A project */
+#ifndef CONFIG_ARCH_MSM7X00A
 		/* Idle micro accounting is supported. Use finer thresholds */
 		dbs_tuners_ins.up_threshold = MICRO_FREQUENCY_UP_THRESHOLD;
 		dbs_tuners_ins.down_differential =
 					MICRO_FREQUENCY_DOWN_DIFFERENTIAL;
+#endif
 	}
 
 	kondemand_wq = create_workqueue("kondemand");
@@ -893,30 +766,13 @@ static int __init cpufreq_gov_dbs_init(void)
 	}
 	err = cpufreq_register_governor(&cpufreq_gov_ondemand);
 	if (err)
-		goto err2;
-
-    err = platform_driver_register(&ondemand_dummy_driver);
-    if (err)
-		goto err1;
-
-#ifdef CONFIG_HAS_EARLYSUSPEND
-    register_early_suspend(&dbs_suspend_info);
-#endif
-
-    return 0;
-
- err1:
-    cpufreq_unregister_governor(&cpufreq_gov_ondemand);
-
- err2:
-    destroy_workqueue(kondemand_wq);
+		destroy_workqueue(kondemand_wq);
 
 	return err;
 }
 
 static void __exit cpufreq_gov_dbs_exit(void)
 {
-	platform_driver_unregister(&ondemand_dummy_driver);
 	cpufreq_unregister_governor(&cpufreq_gov_ondemand);
 	destroy_workqueue(kondemand_wq);
 }
