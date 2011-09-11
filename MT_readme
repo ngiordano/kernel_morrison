@@ -1,0 +1,11 @@
+To add multi-touch:
+CD to your kernel root directory
+
+example: cd ~/workspace/kernel
+
+apply the patch:
+
+patch -p1 <multitouch_key08.patch
+
+enter
+
