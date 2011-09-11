@@ -3,6 +3,7 @@
 echo "copying config for morrison"
 cp arch/arm/configs/morrison_defconfig .config
 
+echo "Buckle your seatbelts!"
 echo "building kernel"
 export ARCH=arm &&
 export CROSS_COMPILE=arm-eabi- &&
