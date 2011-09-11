@@ -1,5 +1,5 @@
 diff -crB kernel.orig/drivers/input/touchscreen/key08.c kernel/drivers/input/touchscreen/key08.c
-*** kernel.orig/drivers/input/touchscreen/key08.c	2010-11-27 19:33:14.853333345 +0800
+*** kernel.orig/drivers/input/touchscreen/key08.c	2011-09-11 19:33:14.853333345 +0800
 --- kernel/drivers/input/touchscreen/key08.c	2010-11-27 19:34:45.986666679 +0800
 ***************
 *** 42,47 ****
