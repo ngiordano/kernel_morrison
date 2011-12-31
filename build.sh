@@ -5,6 +5,7 @@ cp arch/arm/configs/morrison_defconfig .config
 
 echo "Buckle your seatbelts!"
 echo "building kernel"
+export PLATFORM_DIR=~/workspace
 export ARCH=arm &&
 export CROSS_COMPILE=arm-eabi- &&
 export PATH=$PLATFORM_DIR/prebuilt/linux-x86/toolchain/arm-eabi-4.2.1/bin:$PATH &&
